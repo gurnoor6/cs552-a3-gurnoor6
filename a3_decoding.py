@@ -128,6 +128,8 @@ class BeamSearchDecoderForT5(GeneratorForT5):
         new_sequences = []
         new_p = []
         for p_initial, sequence in zip(p_values, sequences):
+            model_inputs_copy = model_inputs.copy()
+
             for item in sequence:
                 model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = item)
             x = self.model(**model_inputs)
@@ -139,6 +141,8 @@ class BeamSearchDecoderForT5(GeneratorForT5):
             for p_value, item in zip(p_sort, max_items):
                 new_sequences.append(torch.cat((sequence, torch.unsqueeze(item, dim=0))))
                 new_p.append(p_initial + p_value)
+
+            model_inputs = model_inputs_copy
 
         new_p, new_sequences = torch.tensor(new_p), torch.stack(new_sequences)
         p_sort, indices = torch.sort(new_p, descending=True)

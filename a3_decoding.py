@@ -238,8 +238,8 @@ class BeamSearchDecoderForT5(GeneratorForT5):
         ########################################################################
         model_inputs = self.prepare_next_inputs(model_inputs = inputs)
         x = self.model(**model_inputs)
-        p = torch.log(torch.exp(x.logits) / torch.sum(torch.exp(x.logits)))
-        p = torch.squeeze(p)
+        logits = x.logits[-1, -1, :]
+        p = torch.log(torch.exp(logits) / torch.sum(torch.exp(logits)))
         p_sort, indices = torch.sort(p, descending=True)
         max_items = indices[:num_beams]
         max_items = list(map(lambda x: torch.tensor(
@@ -288,6 +288,7 @@ def main():
         num_return_sequences=4,
     )
 
+    print(result_dict['scores'])
 
 if __name__ == '__main__':
     main()

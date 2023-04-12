@@ -2,6 +2,7 @@
 import torch
 from typing import Any, Dict
 from a3_utils import *
+import json
 
 from transformers import (
     T5Tokenizer,
@@ -72,7 +73,34 @@ class GreedySearchDecoderForT5(GeneratorForT5):
         #           )
         ########################################################################
 
-        pass
+        new_tokens = []
+        i = 0
+        while True:
+            if i == 0:
+                model_inputs = self.prepare_next_inputs(model_inputs = inputs)
+            else:
+                model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = new_tokens[-1])
+            
+            x = self.model(**model_inputs)
+            new_tokens.append(torch.argmax(x.logits, dim=2)[-1][-1])
+            i += 1
+            
+            if new_tokens[-1].item() == self.eos_token_id:
+                model_inputs["decoder_input_ids"] = torch.cat([
+                    model_inputs["decoder_input_ids"],
+                    model_inputs["decoder_input_ids"].new_ones((model_inputs["decoder_input_ids"].shape[0], 1))],
+                    dim=-1,
+                )
+                model_inputs["decoder_input_ids"][0][-1] = self.eos_token_id
+                break
+            
+            if i == max_new_tokens + 1:
+                break
+        
+        return model_inputs["decoder_input_ids"]
+        
+        
+
 
 class BeamSearchDecoderForT5(GeneratorForT5):
     ###########################################################################
@@ -83,6 +111,42 @@ class BeamSearchDecoderForT5(GeneratorForT5):
     ###########################################################################
     def __init__(self, model: T5ForConditionalGeneration, tokenizer: T5Tokenizer):
         super().__init__(model, tokenizer)
+    
+    def beam_search(
+        self,
+        model_inputs,
+        p_values,
+        sequences,
+        max_new_tokens,
+        num_beams,
+        length_penalty=0.0
+    ):
+        print(max_new_tokens)
+        if max_new_tokens == 0:
+            return p_values, sequences
+
+        new_sequences = []
+        new_p = []
+        for p_initial, sequence in zip(p_values, sequences):
+            for item in sequence:
+                model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = item)
+            x = self.model(**model_inputs)
+            logits = x.logits[-1, -1, :]
+            p = torch.log(torch.exp(logits) / torch.sum(torch.exp(logits)))
+            p_sort, indices = torch.sort(p, descending=True)
+            p_sort = p_sort[:num_beams]
+            max_items = indices[:num_beams]
+            for p_value, item in zip(p_sort, max_items):
+                new_sequences.append(torch.cat((sequence, torch.unsqueeze(item, dim=0))))
+                new_p.append(p_initial + p_value)
+
+        new_p, new_sequences = torch.tensor(new_p), torch.stack(new_sequences)
+        p_sort, indices = torch.sort(new_p, descending=True)
+        p_sort = p_sort[:num_beams]
+        new_sequences = new_sequences[indices][:num_beams]
+
+        return self.beam_search(model_inputs, p_sort, new_sequences, max_new_tokens-1, num_beams, length_penalty)
+        
     
     def search(
         self,
@@ -172,8 +236,24 @@ class BeamSearchDecoderForT5(GeneratorForT5):
         #               new_token_id = new_token_id,
         #           )
         ########################################################################
-
-        pass
+        model_inputs = self.prepare_next_inputs(model_inputs = inputs)
+        x = self.model(**model_inputs)
+        p = torch.log(torch.exp(x.logits) / torch.sum(torch.exp(x.logits)))
+        p = torch.squeeze(p)
+        p_sort, indices = torch.sort(p, descending=True)
+        max_items = indices[:num_beams]
+        max_items = list(map(lambda x: torch.tensor(
+                                            [self.model.config.pad_token_id,
+                                            x.item()]
+                                        ), max_items))
+        max_items = torch.stack(max_items)
+        p_sort = p_sort[:num_beams]
+        
+        p_values, sequences = self.beam_search(model_inputs, p_sort, max_items, max_new_tokens-1, num_beams, length_penalty)
+        return {
+            "sequences": sequences,
+            "scores": p_values
+        }
 
 
 def main():
@@ -186,6 +266,27 @@ def main():
     model_name = "t5-small"
     model = T5ForConditionalGeneration.from_pretrained(model_name)
     tokenizer = T5Tokenizer.from_pretrained(model_name)
+
+    # 2) Load relevant inputs
+    with open("part1_input_data.json", 'r') as read_file:
+        input_data = json.load(read_file)
+
+    t5_paper_abstract = input_data["t5_paper_abstract"]
+    summary_prefix = "summarize: "
+    abstract_inputs = tokenizer(
+        [summary_prefix + t5_paper_abstract], 
+        max_length=MAX_T5_SEQ_LENGTH, 
+        truncation=True, 
+        return_tensors="pt"
+    )
+    beam_decoder = BeamSearchDecoderForT5(model=model, tokenizer=tokenizer)
+    result_dict = beam_decoder.search(
+        inputs=abstract_inputs,
+        max_new_tokens=2,
+        num_beams=4,
+        length_penalty=0.0,
+        num_return_sequences=4,
+    )
 
 
 if __name__ == '__main__':

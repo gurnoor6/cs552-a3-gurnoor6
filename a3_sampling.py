@@ -1,6 +1,7 @@
 import torch
 from typing import Any, Dict
 from a3_utils import *
+import numpy as np
 
 from transformers import (
     T5Tokenizer,
@@ -80,7 +81,37 @@ class TopKSamplerForT5(GeneratorForT5):
         #           )
         ########################################################################
 
-        pass
+        new_tokens = []
+        i = 0
+        while True:
+            if i == 0:
+                model_inputs = self.prepare_next_inputs(model_inputs = inputs)
+            else:
+                model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = new_tokens[-1])
+            
+            x = self.model(**model_inputs)
+            logits = x.logits[-1, -1, :]
+            p_values = torch.exp(logits / temperature) / torch.sum(torch.exp(logits / temperature))
+            p_sort, indices = torch.sort(p_values, descending=True)
+            p_sort, indices = p_sort[:top_k], indices[:top_k]
+            p_sort = p_sort / torch.sum(p_sort)
+            choice = np.random.choice(indices.detach().numpy(), p=p_sort.detach().numpy())
+            new_tokens.append(choice)
+            i += 1
+            
+            if new_tokens[-1] == self.eos_token_id:
+                model_inputs["decoder_input_ids"] = torch.cat([
+                    model_inputs["decoder_input_ids"],
+                    model_inputs["decoder_input_ids"].new_ones((model_inputs["decoder_input_ids"].shape[0], 1))],
+                    dim=-1,
+                )
+                model_inputs["decoder_input_ids"][0][-1] = self.eos_token_id
+                break
+            
+            if i == max_new_tokens + 1:
+                break
+        
+        return model_inputs["decoder_input_ids"]
 
 
 class TopPSamplerForT5(GeneratorForT5):
@@ -161,7 +192,44 @@ class TopPSamplerForT5(GeneratorForT5):
         #           )
         ########################################################################
 
-        pass
+        new_tokens = []
+        i = 0
+        while True:
+            if i == 0:
+                model_inputs = self.prepare_next_inputs(model_inputs = inputs)
+            else:
+                model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = new_tokens[-1])
+            
+            x = self.model(**model_inputs)
+            logits = x.logits[-1, -1, :]
+            p_values = torch.exp(logits / temperature) / torch.sum(torch.exp(logits / temperature))
+            p_sort, indices = torch.sort(p_values, descending=True)
+            p_cumsum = torch.cumsum(p_sort, dim=0)
+            j = 0
+            while True:
+                if p_cumsum[j].item() >= top_p:
+                    break
+                j += 1
+        
+            p_sort, indices = p_sort[:j+1], indices[:j+1]
+            p_sort = p_sort / torch.sum(p_sort)
+            choice = np.random.choice(indices.detach().numpy(), p=p_sort.detach().numpy())
+            new_tokens.append(choice)
+            i += 1
+            
+            if new_tokens[-1] == self.eos_token_id:
+                model_inputs["decoder_input_ids"] = torch.cat([
+                    model_inputs["decoder_input_ids"],
+                    model_inputs["decoder_input_ids"].new_ones((model_inputs["decoder_input_ids"].shape[0], 1))],
+                    dim=-1,
+                )
+                model_inputs["decoder_input_ids"][0][-1] = self.eos_token_id
+                break
+            
+            if i == max_new_tokens + 1:
+                break
+        
+        return model_inputs["decoder_input_ids"]
 
 def main():
     ############################################################################

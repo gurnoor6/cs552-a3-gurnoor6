@@ -121,7 +121,7 @@ class BeamSearchDecoderForT5(GeneratorForT5):
         num_beams,
         length_penalty=0.0
     ):
-        print("new:", max_new_tokens)
+        # print("new:", max_new_tokens)
         # print(max_new_tokens)
         if max_new_tokens == 0:
             return p_values, sequences

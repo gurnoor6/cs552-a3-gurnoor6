@@ -121,7 +121,7 @@ class BeamSearchDecoderForT5(GeneratorForT5):
         num_beams,
         length_penalty=0.0
     ):
-        # print("new:", max_new_tokens)
+        print("new:", max_new_tokens)
         # print(max_new_tokens)
         if max_new_tokens == 0:
             return p_values, sequences
@@ -135,8 +135,12 @@ class BeamSearchDecoderForT5(GeneratorForT5):
                 continue
 
             model_inputs_copy = model_inputs.copy()
-
+            
+            is_pad_token = True
             for item in sequence:
+                if is_pad_token:
+                    is_pad_token = False
+                    continue
                 model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = item)
 
 

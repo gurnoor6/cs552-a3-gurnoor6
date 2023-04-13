@@ -121,17 +121,25 @@ class BeamSearchDecoderForT5(GeneratorForT5):
         num_beams,
         length_penalty=0.0
     ):
-        print(max_new_tokens)
+        # print("new:", max_new_tokens)
+        # print(max_new_tokens)
         if max_new_tokens == 0:
             return p_values, sequences
 
         new_sequences = []
         new_p = []
         for p_initial, sequence in zip(p_values, sequences):
+            if sequence[-1].item() == self.eos_token_id:
+                new_sequences.append(sequence)
+                new_p.append(p_initial)
+                continue
+
             model_inputs_copy = model_inputs.copy()
 
             for item in sequence:
                 model_inputs = self.prepare_next_inputs(model_inputs = model_inputs, new_token_id = item)
+
+
             x = self.model(**model_inputs)
             logits = x.logits[-1, -1, :]
             p = torch.log(torch.exp(logits) / torch.sum(torch.exp(logits)))
@@ -140,11 +148,18 @@ class BeamSearchDecoderForT5(GeneratorForT5):
             max_items = indices[:num_beams]
             for p_value, item in zip(p_sort, max_items):
                 new_sequences.append(torch.cat((sequence, torch.unsqueeze(item, dim=0))))
-                new_p.append(p_initial + p_value)
+
+                # penalty factor
+                pen_f = (len(sequences[0]) ** length_penalty)
+                new_p.append(p_initial * pen_f + p_value)
 
             model_inputs = model_inputs_copy
 
         new_p, new_sequences = torch.tensor(new_p), torch.stack(new_sequences)
+
+        # # adding length penalty
+        new_p /= (len(new_sequences[0]) ** length_penalty)
+
         p_sort, indices = torch.sort(new_p, descending=True)
         p_sort = p_sort[:num_beams]
         new_sequences = new_sequences[indices][:num_beams]
@@ -251,12 +266,12 @@ class BeamSearchDecoderForT5(GeneratorForT5):
                                             x.item()]
                                         ), max_items))
         max_items = torch.stack(max_items)
-        p_sort = p_sort[:num_beams]
+        p_sort = p_sort[:num_beams] / (len(max_items[0]) ** length_penalty)
         
         p_values, sequences = self.beam_search(model_inputs, p_sort, max_items, max_new_tokens-1, num_beams, length_penalty)
         return {
-            "sequences": sequences,
-            "scores": p_values
+            "sequences": sequences[:num_return_sequences],
+            "scores": p_values[:num_return_sequences]
         }
 
 
